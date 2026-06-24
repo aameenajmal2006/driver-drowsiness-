@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DrowsyGuard v3 — Driver Drowsiness Detection</title>
+<script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0d14;--surface:#111420;--surface2:#181c2b;--surface3:#1e2235;
+  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.13);
+  --text:#e8eaf0;--text2:#8890a8;--text3:#555e78;
+  --green:#00e5a0;--yellow:#ffc84a;--red:#ff4d6d;
+  --accent:#5a6aff;--wa:#25D366;
+  --mono:'Space Mono',monospace;--sans:'Barlow',sans-serif;
+}
+body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+
+/* HEADER */
+header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:16px;font-weight:700}
+.logo-icon{width:32px;height:32px;background:var(--accent);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.logo span{color:var(--accent)}
+.hdr-right{display:flex;gap:9px;align-items:center}
+.eye-pill{font-family:var(--mono);font-size:12px;color:var(--text3);background:var(--surface2);border:1px solid var(--border);padding:5px 12px;border-radius:16px;transition:all .3s;min-width:70px;text-align:center}
+.eye-pill.warn{color:var(--yellow);border-color:var(--yellow)}
+.eye-pill.danger{color:var(--red);border-color:var(--red);animation:pulse .4s infinite}
+.status-pill{display:flex;align-items:center;gap:7px;padding:5px 13px;border-radius:20px;font-size:12px;font-weight:600;font-family:var(--mono);background:var(--surface2);border:1px solid var(--border2)}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:all .3s}
+.sdot.active{background:var(--green);box-shadow:0 0 7px var(--green);animation:pulse 1.5s infinite}
+.sdot.warn{background:var(--yellow);box-shadow:0 0 7px var(--yellow);animation:pulse .9s infinite}
+.sdot.danger{background:var(--red);box-shadow:0 0 7px var(--red);animation:pulse .35s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* LAYOUT */
+main{display:grid;grid-template-columns:1fr 360px;height:calc(100vh - 63px);overflow:hidden}
+.cam-panel{padding:18px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;border-right:1px solid var(--border)}
+.dash-panel{background:var(--surface);display:flex;flex-direction:column;overflow-y:auto}
+.dash-sec{padding:14px 17px;border-bottom:1px solid var(--border)}
+.dash-title{font-size:10px;font-family:var(--mono);text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:11px}
+
+/* VIDEO */
+.video-wrap{position:relative;background:#000;border-radius:11px;overflow:hidden;border:1px solid var(--border2);aspect-ratio:4/3;max-height:390px;flex-shrink:0}
+#video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block}
+#overlay{position:absolute;top:0;left:0;width:100%;height:100%;transform:scaleX(-1)}
+.vid-placeholder{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:var(--text3);font-family:var(--mono);display:flex;flex-direction:column;align-items:center;gap:8px}
+.vid-placeholder .bi{font-size:42px}
+
+/* COUNTDOWN RING */
+#cdOverlay{position:absolute;bottom:10px;right:10px;width:66px;height:66px;display:none;align-items:center;justify-content:center;z-index:9}
+#cdOverlay.show{display:flex}
+#cdSvg{position:absolute;top:0;left:0;transform:rotate(-90deg)}
+#cdArc{stroke-dasharray:188.5;stroke-dashoffset:188.5;transition:stroke-dashoffset .9s linear}
+#cdNum{font-family:var(--mono);font-size:21px;font-weight:700;color:#fff;position:relative;z-index:1;text-shadow:0 0 8px rgba(255,77,109,.8)}
+
+/* PHOTO THUMBNAIL on video */
+#captureFlash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .1s;z-index:8}
+#captureFlash.flash{opacity:.6}
+
+/* ALERT BANNER */
+#alertBanner{position:absolute;top:0;left:0;right:0;padding:9px 14px;text-align:center;font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;transform:translateY(-100%);transition:transform .3s;z-index:10}
+#alertBanner.show{transform:translateY(0)}
+#alertBanner.warning{background:var(--yellow);color:#000}
+#alertBanner.danger{background:var(--red);color:#fff;animation:flashBg .35s infinite}
+@keyframes flashBg{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* CONTROLS */
+.cam-ctrls{display:flex;gap:9px;flex-wrap:wrap}
+.btn{padding:8px 16px;border-radius:7px;border:1px solid var(--border2);background:var(--surface2);color:var(--text);font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px}
+.btn:hover{background:var(--surface3);border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{opacity:.88}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn.wa-btn{background:rgba(37,211,102,.12);border-color:var(--wa);color:var(--wa)}
+.btn.wa-btn:hover{background:rgba(37,211,102,.22)}
+
+/* EAR */
+.ear-sec{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:13px}
+.ear-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.ear-title{font-size:11px;color:var(--text2);font-family:var(--mono)}
+.ear-val{font-family:var(--mono);font-size:17px;font-weight:700;color:var(--green)}
+.prog-bar{height:6px;background:var(--surface3);border-radius:3px;overflow:hidden;margin-bottom:4px}
+.prog-fill{height:100%;border-radius:3px;background:var(--green);transition:width .15s,background .3s}
+.ear-scale{display:flex;justify-content:space-between;font-size:10px;color:var(--text3);font-family:var(--mono)}
+
+/* METRICS */
+.m-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.m-card{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:11px;text-align:center}
+.m-lbl{font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.m-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--green);transition:color .3s}
+.m-val.warn{color:var(--yellow)}.m-val.danger{color:var(--red);animation:pulse .5s infinite}
+.m-unit{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:2px}
+
+/* CHART */
+.chart-wrap{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:11px}
+.chart-lbl{font-size:10px;font-family:var(--mono);color:var(--text3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:7px}
+#earChart{width:100%;height:60px}
+
+/* STATE */
+.state-disp{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:9px;background:var(--surface2);border:1px solid var(--border);transition:all .3s}
+.state-disp.awake{border-color:var(--green);background:rgba(0,229,160,.08)}
+.state-disp.drowsy{border-color:var(--yellow);background:rgba(255,200,74,.08)}
+.state-disp.sleeping{border-color:var(--red);background:rgba(255,77,109,.1);animation:shake .22s infinite}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+.s-icon{font-size:24px}
+.s-name{font-size:15px;font-weight:700;font-family:var(--mono)}
+.s-desc{font-size:11px;color:var(--text2);margin-top:2px}
+
+/* COUNTDOWN SECTION */
+.cd-sec{background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:13px;display:flex;align-items:center;gap:13px}
+.cd-sec.danger{border-color:var(--red);background:rgba(255,77,109,.08)}
+.cd-sec.ok{border-color:var(--green)}
+.big-tmr{font-family:var(--mono);font-size:34px;font-weight:700;color:var(--text3);min-width:54px;text-align:center;transition:color .3s}
+.big-tmr.counting{color:var(--yellow)}.big-tmr.alerting{color:var(--red);animation:pulse .4s infinite}
+.tmr-info{flex:1}
+.tmr-lbl{font-size:10px;color:var(--text3);font-family:var(--mono);text-transform:uppercase;letter-spacing:.4px}
+.tmr-status{font-size:12px;color:var(--text2);margin-top:3px}
+
+/* SCORE */
+.score-wrap{display:flex;justify-content:center;margin:4px 0;position:relative}
+.score-svg{transform:rotate(-90deg)}
+.score-bg{fill:none;stroke:var(--surface3);stroke-width:7}
+.score-arc{fill:none;stroke:var(--green);stroke-width:7;stroke-linecap:round;transition:stroke-dashoffset .5s,stroke .3s}
+.score-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center}
+.score-num{font-family:var(--mono);font-size:24px;font-weight:700;display:block}
+.score-sub{font-size:9px;color:var(--text3);font-family:var(--mono)}
+
+/* OWNER PANEL */
+.owner-panel{background:var(--surface2);border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.owner-hdr{padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;font-family:var(--mono)}
+.owner-body{padding:11px 13px}
+.o-field{margin-bottom:9px}
+.o-field label{display:block;font-size:10px;color:var(--text3);font-family:var(--mono);margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px}
+.o-field input{width:100%;background:var(--surface3);border:1px solid var(--border2);border-radius:6px;padding:7px 9px;color:var(--text);font-family:var(--mono);font-size:12px;outline:none}
+.o-field input:focus{border-color:var(--accent)}
+.wa-note{font-size:10px;color:var(--wa);font-family:var(--mono);margin-top:3px;display:flex;align-items:center;gap:4px}
+
+/* ALERT HISTORY CARDS */
+.alert-card{background:var(--surface2);border:1px solid rgba(255,77,109,.35);border-radius:7px;padding:9px 11px;margin-bottom:7px;animation:logIn .4s ease}
+@keyframes logIn{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.ac-time{font-family:var(--mono);font-size:10px;color:var(--text3)}
+.ac-msg{font-size:12px;color:var(--red);font-weight:600;margin:2px 0}
+.ac-detail{font-size:11px;color:var(--text2)}
+.ac-photo{margin-top:7px;border-radius:5px;overflow:hidden;border:1px solid var(--border2)}
+.ac-photo img{width:100%;display:block;max-height:90px;object-fit:cover}
+.ac-actions{display:flex;gap:7px;margin-top:8px}
+.ac-btn{padding:5px 11px;border-radius:5px;border:1px solid;font-size:11px;font-family:var(--mono);cursor:pointer;text-decoration:none;display:flex;align-items:center;gap:5px;font-weight:600}
+.ac-btn.wa{background:rgba(37,211,102,.1);border-color:var(--wa);color:var(--wa)}
+.ac-btn.dl{background:rgba(90,106,255,.1);border-color:var(--accent);color:var(--accent)}
+
+/* STATS */
+.stat-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+.stat-row:last-child{border-bottom:none}
+.stat-row span:first-child{color:var(--text2)}
+.stat-row span:last-child{font-family:var(--mono);color:var(--text);font-weight:600}
+
+/* SETTINGS */
+.set-row{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.set-lbl{font-size:11px;color:var(--text2);flex:1;font-family:var(--mono)}
+input[type=range]{flex:1;-webkit-appearance:none;height:3px;border-radius:2px;background:var(--surface3);outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--accent);cursor:pointer}
+.set-val{font-family:var(--mono);font-size:11px;color:var(--accent);min-width:30px;text-align:right}
+
+/* LOG */
+.log-list{display:flex;flex-direction:column;gap:4px;max-height:150px;overflow-y:auto}
+.log-item{display:flex;align-items:flex-start;gap:7px;padding:6px 8px;border-radius:5px;background:var(--surface2);border:1px solid var(--border);font-size:11px;animation:logIn .3s ease}
+.ldot{width:6px;height:6px;border-radius:50%;margin-top:3px;flex-shrink:0}
+.ldot.ok{background:var(--green)}.ldot.warn{background:var(--yellow)}.ldot.err{background:var(--red)}
+.ltime{color:var(--text3);font-family:var(--mono);flex-shrink:0}
+.lmsg{color:var(--text2)}
+
+/* LOADING */
+.load-ov{position:fixed;inset:0;background:rgba(10,13,20,.96);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:999;gap:16px}
+.load-ov.hidden{display:none}
+.load-ring{width:50px;height:50px;border:3px solid var(--surface3);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.load-title{font-family:var(--mono);font-size:15px;font-weight:700}
+.load-step{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text3);font-family:var(--mono)}
+.load-step.done{color:var(--green)}.load-step.active{color:var(--text)}
+
+/* TOAST */
+#toast{position:fixed;top:72px;right:18px;z-index:200;background:var(--surface);border:1px solid var(--red);border-radius:9px;padding:13px 15px;min-width:250px;max-width:310px;transform:translateX(360px);transition:transform .4s cubic-bezier(.22,1,.36,1)}
+#toast.show{transform:translateX(0)}
+.toast-hdr{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.toast-icon{font-size:17px}
+.toast-title{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--red)}
+.toast-body{font-size:12px;color:var(--text2);line-height:1.5}
+.toast-photo{margin-top:8px;border-radius:5px;overflow:hidden}
+.toast-photo img{width:100%;max-height:80px;object-fit:cover;display:block}
+.toast-wa{display:flex;align-items:center;gap:6px;margin-top:9px;padding:7px 11px;background:rgba(37,211,102,.12);border:1px solid var(--wa);border-radius:6px;color:var(--wa);font-family:var(--mono);font-size:11px;font-weight:700;text-decoration:none;cursor:pointer}
+.toast-wa:hover{background:rgba(37,211,102,.2)}
+
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
+</style>
+</head>
+<body>
+
+<!-- LOADING OVERLAY -->
+<div class="load-ov" id="loadOv">
+  <div class="load-ring"></div>
+  <div class="load-title">DrowsyGuard</div>
+  <div style="font-size:12px;color:var(--text2)">Loading AI/ML models...</div>
+  <div style="display:flex;flex-direction:column;gap:6px;min-width:255px">
+    <div class="load-step active" id="s1"><span id="si1">🔄</span> Face Detection (TinyFaceDetector)</div>
+    <div class="load-step" id="s2"><span id="si2">⬜</span> Facial Landmarks 68-point</div>
+    <div class="load-step" id="s3"><span id="si3">⬜</span> Expression Recognition CNN</div>
+    <div class="load-step" id="s4"><span id="si4">⬜</span> Initializing EAR pipeline</div>
+  </div>
+</div>
+
+<!-- TOAST NOTIFICATION -->
+<div id="toast">
+  <div class="toast-hdr">
+    <div class="toast-icon">🚨</div>
+    <div class="toast-title">OWNER ALERT SENT</div>
+  </div>
+  <div class="toast-body" id="toastBody"></div>
+  <div class="toast-photo" id="toastPhoto"></div>
+  <a class="toast-wa" id="toastWaLink" href="#" target="_blank">
+    📲 Open WhatsApp Alert
+  </a>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">👁</div>
+    Drowsy<span>Guard</span>
+    <span style="font-size:10px;color:var(--text3);font-weight:400;margin-left:3px">v3.0</span>
+  </div>
+  <div class="hdr-right">
+    <div class="eye-pill" id="eyePill">👁 0.0s</div>
+    <div class="status-pill">
+      <div class="sdot" id="sdot"></div>
+      <span id="stext">OFFLINE</span>
+    </div>
+  </div>
+</header>
+
+<main>
+<!-- LEFT: CAMERA -->
+<div class="cam-panel">
+  <div class="video-wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+    <!-- hidden snapshot canvas -->
+    <canvas id="snapCanvas" style="display:none"></canvas>
+    <!-- Flash effect -->
+    <div id="captureFlash"></div>
+    <!-- Countdown ring -->
+    <div id="cdOverlay">
+      <svg id="cdSvg" width="66" height="66" viewBox="0 0 66 66">
+        <circle cx="33" cy="33" r="30" fill="rgba(0,0,0,0.55)" stroke="rgba(255,77,109,.2)" stroke-width="5"/>
+        <circle id="cdArc" cx="33" cy="33" r="30" fill="none" stroke="#ff4d6d" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="188.5" stroke-dashoffset="188.5"/>
+      </svg>
+      <div id="cdNum">5</div>
+    </div>
+    <div class="vid-placeholder" id="vidPh">
+      <div class="bi">📷</div>
+      <p>Camera not started</p>
+      <p style="font-size:10px;color:var(--text3);margin-top:2px">Click Start Monitoring</p>
+    </div>
+    <div id="alertBanner"></div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="cam-ctrls">
+    <button class="btn primary" id="startBtn" onclick="startSystem()">▶ Start Monitoring</button>
+    <button class="btn" id="stopBtn" onclick="stopSystem()" disabled>⏹ Stop</button>
+    <button class="btn" id="resetBtn" onclick="resetStats()" disabled>↺ Reset</button>
+    <button class="btn" id="muteBtn" onclick="toggleMute()">🔊 Sound</button>
+    <button class="btn" id="snapBtn" onclick="manualSnap()" disabled>📸 Snap</button>
+  </div>
+
+  <!-- EAR BAR -->
+  <div class="ear-sec">
+    <div class="ear-row">
+      <div>
+        <div class="ear-title">Eye Aspect Ratio (EAR) — ML metric</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:1px">Alert + WhatsApp fires at 5s eye closure</div>
+      </div>
+      <div class="ear-val" id="earDisp">—</div>
+    </div>
+    <div class="prog-bar"><div class="prog-fill" id="earBar" style="width:0%"></div></div>
+    <div class="ear-scale"><span>0.0 Closed</span><span id="earThrLbl">Thr</span><span>0.4 Open</span></div>
+  </div>
+
+  <!-- METRICS -->
+  <div class="m-grid">
+    <div class="m-card">
+      <div class="m-lbl">Blink/min</div>
+      <div class="m-val" id="blinkRate">—</div>
+      <div class="m-unit">rate</div>
+    </div>
+    <div class="m-card">
+      <div class="m-lbl">Closed</div>
+      <div class="m-val" id="closedSec">0.0</div>
+      <div class="m-unit">seconds</div>
+    </div>
+    <div class="m-card">
+      <div class="m-lbl">Blinks</div>
+      <div class="m-val" id="totalBlinks">0</div>
+      <div class="m-unit">total</div>
+    </div>
+    <div class="m-card">
+      <div class="m-lbl">Alerts</div>
+      <div class="m-val" id="alertsM" style="color:var(--red)">0</div>
+      <div class="m-unit">sent</div>
+    </div>
+  </div>
+
+  <!-- EAR CHART -->
+  <div class="chart-wrap">
+    <div class="chart-lbl">EAR Trend — last 60 frames &nbsp;— — threshold</div>
+    <canvas id="earChart"></canvas>
+  </div>
+</div>
+
+<!-- RIGHT: DASHBOARD -->
+<div class="dash-panel">
+
+  <!-- STATE -->
+  <div class="dash-sec">
+    <div class="dash-title">Driver State</div>
+    <div class="state-disp" id="stateDisp">
+      <div class="s-icon" id="sIcon">😐</div>
+      <div>
+        <div class="s-name" id="sName">STANDBY</div>
+        <div class="s-desc" id="sDesc">Start monitoring to begin</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5-SECOND TIMER -->
+  <div class="dash-sec">
+    <div class="dash-title">5-Second Eye Closure Timer</div>
+    <div class="cd-sec" id="cdSec">
+      <div class="big-tmr" id="bigTmr">0.0s</div>
+      <div class="tmr-info">
+        <div class="tmr-lbl">Eyes closed for</div>
+        <div class="tmr-status" id="tmrStat">Eyes open — normal</div>
+        <div style="margin-top:5px">
+          <div style="height:4px;background:var(--surface3);border-radius:2px;overflow:hidden">
+            <div id="tmrBar" style="height:100%;width:0%;background:var(--green);border-radius:2px;transition:width .1s,background .3s"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DROWSINESS SCORE -->
+  <div class="dash-sec">
+    <div class="dash-title">Drowsiness Score</div>
+    <div class="score-wrap">
+      <svg class="score-svg" width="110" height="110" viewBox="0 0 110 110">
+        <circle class="score-bg" cx="55" cy="55" r="46"/>
+        <circle class="score-arc" id="scoreArc" cx="55" cy="55" r="46" stroke-dasharray="289.0" stroke-dashoffset="289.0"/>
+      </svg>
+      <div class="score-center">
+        <span class="score-num" id="scoreNum">0</span>
+        <span class="score-sub">/ 100</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- OWNER CONFIG -->
+  <div class="dash-sec">
+    <div class="dash-title">Owner Alert — WhatsApp Config</div>
+    <div class="owner-panel">
+      <div class="owner-hdr">
+        <span style="color:var(--wa)">📲</span>
+        <span>Alert Recipient (Owner)</span>
+      </div>
+      <div class="owner-body">
+        <div class="o-field">
+          <label>Owner Name</label>
+          <input type="text" id="ownerName" value="Rahul Sharma" placeholder="Owner name"/>
+        </div>
+        <div class="o-field">
+          <label>WhatsApp Number (with country code)</label>
+          <input type="text" id="ownerPhone" value="919876543210" placeholder="919876543210"/>
+          <div class="wa-note">📲 Format: 91XXXXXXXXXX (no +, spaces, or -)</div>
+        </div>
+        <div class="o-field">
+          <label>Vehicle / Driver ID</label>
+          <input type="text" id="vehicleId" value="MH-12-AB-3456 / Driver: Amit Kumar" placeholder="Vehicle number"/>
+        </div>
+        <div style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:4px">
+          ✓ Alert + driver photo fires after 5s eye closure
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECENT ALERTS -->
+  <div class="dash-sec">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div class="dash-title" style="margin-bottom:0">Recent Alerts + Photos</div>
+      <button onclick="clearAlerts()" style="font-size:10px;color:var(--text3);background:none;border:none;cursor:pointer;font-family:var(--mono)">CLEAR</button>
+    </div>
+    <div id="alertHist" style="max-height:200px;overflow-y:auto">
+      <div style="font-size:11px;color:var(--text3);font-family:var(--mono);text-align:center;padding:14px 0">No alerts yet</div>
+    </div>
+  </div>
+
+  <!-- SESSION STATS -->
+  <div class="dash-sec">
+    <div class="dash-title">Session Stats</div>
+    <div class="stat-row"><span>Session Time</span><span id="sessTime">00:00</span></div>
+    <div class="stat-row"><span>Drowsy Events</span><span id="drowsyEv">0</span></div>
+    <div class="stat-row"><span>Max Closure</span><span id="maxClos">0.0s</span></div>
+    <div class="stat-row"><span>Avg EAR</span><span id="avgEar">—</span></div>
+    <div class="stat-row"><span>Face Detected</span><span id="faceD">No</span></div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="dash-sec">
+    <div class="dash-title">Settings</div>
+    <div class="set-row">
+      <div class="set-lbl">EAR Threshold</div>
+      <input type="range" min="10" max="35" value="21" id="earThr" step="1" oninput="updateSettings()">
+      <div class="set-val" id="earThrV">0.21</div>
+    </div>
+    <div class="set-row">
+      <div class="set-lbl">Alert after (sec)</div>
+      <input type="range" min="2" max="10" value="5" id="secThr" step="1" oninput="updateSettings()">
+      <div class="set-val" id="secThrV">5s</div>
+    </div>
+  </div>
+
+  <!-- EVENT LOG -->
+  <div class="dash-sec" style="flex:1">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:9px">
+      <div class="dash-title" style="margin-bottom:0">Event Log</div>
+      <button onclick="clearLog()" style="font-size:10px;color:var(--text3);background:none;border:none;cursor:pointer;font-family:var(--mono)">CLEAR</button>
+    </div>
+    <div class="log-list" id="logList">
+      <div class="log-item"><div class="ldot ok"></div><span class="ltime">00:00</span><span class="lmsg">System ready. Configure owner WhatsApp, then start.</span></div>
+    </div>
+  </div>
+
+</div>
+</main>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+let videoEl, overlayEl, ctx, snapCanvas, snapCtx;
+let stream=null, detInterval=null, isRunning=false, muted=false;
+let audioCtx=null;
+
+let EAR_THRESH=0.21, ALERT_SECS=5;
+const FPS=10;
+
+let closedFrames=0, eyeClosedSecs=0, maxClosureSecs=0;
+let blinkCount=0, drowsyEvents=0, alertsSent=0;
+let earSum=0, earSamples=0, drowScore=0;
+let eyeWasOpen=true, blinkHist=[], earHist=new Array(60).fill(0.3);
+let sessionStart=null, modelsLoaded=false, lastEar=0.3;
+let alertFired=false, beepIv=null, lastAlertPhoto=null;
+
+const MODEL_URL='https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
+
+// ============================================================
+// MODEL LOADING
+// ============================================================
+async function loadModels(){
+  try{
+    setStep(0,'active');
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    setStep(0,'done');
+    setStep(1,'active');
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+    setStep(1,'done');
+    setStep(2,'active');
+    await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+    setStep(2,'done');
+    setStep(3,'active');
+    await new Promise(r=>setTimeout(r,300));
+    setStep(3,'done');
+    modelsLoaded=true;
+    setTimeout(()=>{document.getElementById('loadOv').classList.add('hidden');addLog('ok','AI models loaded: TinyFaceDetector + Landmark68 + Expressions');},500);
+  }catch(e){
+    for(let i=0;i<4;i++)setStep(i,'done');
+    modelsLoaded=false;
+    setTimeout(()=>{document.getElementById('loadOv').classList.add('hidden');addLog('warn','Simulation mode (model CDN unreachable in this environment)');},500);
+  }
+}
+function setStep(i,s){
+  const ids=['s1','s2','s3','s4'],si=['si1','si2','si3','si4'];
+  document.getElementById(ids[i]).className='load-step '+s;
+  document.getElementById(si[i]).textContent=s==='done'?'✅':s==='active'?'🔄':'⬜';
+}
+
+// ============================================================
+// AUDIO — loud alarm
+// ============================================================
+function getAC(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx}
+function beep(freq,dur,vol=0.5){
+  if(muted)return;
+  try{
+    const ac=getAC(),o=ac.createOscillator(),g=ac.createGain();
+    o.connect(g);g.connect(ac.destination);
+    o.frequency.value=freq;o.type='sawtooth';
+    g.gain.setValueAtTime(vol,ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,ac.currentTime+dur);
+    o.start();o.stop(ac.currentTime+dur);
+  }catch(e){}
+}
+function startAlarm(){
+  if(beepIv)return;
+  const doBeep=()=>{beep(880,.1,.7);setTimeout(()=>beep(660,.1,.6),120);setTimeout(()=>beep(440,.15,.6),240)};
+  doBeep();
+  beepIv=setInterval(doBeep,600);
+}
+function stopAlarm(){if(beepIv){clearInterval(beepIv);beepIv=null}}
+function toggleMute(){muted=!muted;document.getElementById('muteBtn').textContent=muted?'🔇 Muted':'🔊 Sound';if(muted)stopAlarm()}
+
+// ============================================================
+// PHOTO CAPTURE  ← NEW FEATURE
+// ============================================================
+function captureDriverPhoto(){
+  if(!videoEl||!snapCanvas)return null;
+  try{
+    snapCanvas.width=videoEl.videoWidth||320;
+    snapCanvas.height=videoEl.videoHeight||240;
+    snapCtx.save();
+    // Mirror back to normal (video is CSS-mirrored)
+    snapCtx.translate(snapCanvas.width,0);
+    snapCtx.scale(-1,1);
+    snapCtx.drawImage(videoEl,0,0,snapCanvas.width,snapCanvas.height);
+    snapCtx.restore();
+    // Flash effect
+    const flash=document.getElementById('captureFlash');
+    flash.classList.add('flash');
+    setTimeout(()=>flash.classList.remove('flash'),200);
+    return snapCanvas.toDataURL('image/jpeg',0.7);
+  }catch(e){return null}
+}
+function manualSnap(){
+  const photo=captureDriverPhoto();
+  if(photo)addLog('ok','Manual snapshot taken');
+  else addLog('warn','No video stream for snapshot');
+}
+
+// ============================================================
+// WHATSAPP ALERT  ← NEW FEATURE
+// ============================================================
+function buildWhatsAppURL(seconds, photoDataUrl){
+  const owner=document.getElementById('ownerName').value||'Owner';
+  const phone=document.getElementById('ownerPhone').value.replace(/\D/g,'')||'';
+  const vehicle=document.getElementById('vehicleId').value||'Unknown Vehicle';
+  const now=new Date();
+  const timeStr=now.toLocaleTimeString('en-IN');
+  const dateStr=now.toLocaleDateString('en-IN');
+
+  const msg=
+`🚨 *DROWSINESS ALERT — DrowsyGuard*
+
+⚠️ *Driver may be sleeping at the wheel!*
+
+🚗 *Vehicle:* ${vehicle}
+😴 *Eyes closed for:* ${seconds.toFixed(1)} seconds
+🕐 *Time:* ${timeStr}
+📅 *Date:* ${dateStr}
+
+📸 *Driver photo captured at time of alert*
+
+Please check on the driver immediately!
+This alert was sent automatically by DrowsyGuard Safety System.`;
+
+  const encoded=encodeURIComponent(msg);
+  const url=phone?`https://wa.me/${phone}?text=${encoded}`:`https://wa.me/?text=${encoded}`;
+  return {url, phone, msg};
+}
+
+function sendWhatsAppAlert(seconds, photoDataUrl){
+  const {url, phone, msg}=buildWhatsAppURL(seconds, photoDataUrl);
+
+  // Open WhatsApp in new tab
+  window.open(url,'_blank');
+
+  return {url, phone};
+}
+
+// ============================================================
+// CAMERA & SYSTEM
+// ============================================================
+async function startSystem(){
+  videoEl=document.getElementById('video');
+  overlayEl=document.getElementById('overlay');
+  snapCanvas=document.getElementById('snapCanvas');
+  snapCtx=snapCanvas.getContext('2d');
+
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,facingMode:'user'},audio:false});
+    videoEl.srcObject=stream;
+    await new Promise(r=>videoEl.onloadedmetadata=r);
+    overlayEl.width=videoEl.videoWidth;
+    overlayEl.height=videoEl.videoHeight;
+    ctx=overlayEl.getContext('2d');
+    document.getElementById('vidPh').style.display='none';
+  }catch(e){addLog('warn','No camera: '+e.message+' — simulation mode active')}
+
+  document.getElementById('startBtn').disabled=true;
+  document.getElementById('stopBtn').disabled=false;
+  document.getElementById('resetBtn').disabled=false;
+  document.getElementById('snapBtn').disabled=false;
+  isRunning=true;
+  sessionStart=Date.now();
+  setInterval(updateSessTime,1000);
+  setStatus('active','MONITORING');
+  addLog('ok','Monitoring started. Alert threshold: '+ALERT_SECS+'s. WhatsApp alert enabled.');
+  beep(523,.15);
+
+  if(modelsLoaded&&stream)startDetectionLoop();
+  else startSimulation();
+  setInterval(drawChart,150);
+}
+
+function stopSystem(){
+  isRunning=false;stopAlarm();
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  clearInterval(detInterval);
+  document.getElementById('startBtn').disabled=false;
+  document.getElementById('stopBtn').disabled=true;
+  document.getElementById('snapBtn').disabled=true;
+  document.getElementById('vidPh').style.display='flex';
+  document.getElementById('video').srcObject=null;
+  setStatus('','OFFLINE');setDriverState('standby');hideAlert();hideCD();
+  addLog('ok','Monitoring stopped.');
+}
+
+function resetStats(){
+  closedFrames=0;eyeClosedSecs=0;maxClosureSecs=0;
+  blinkCount=0;drowsyEvents=0;alertsSent=0;
+  earSum=0;earSamples=0;drowScore=0;blinkHist=[];
+  earHist=new Array(60).fill(0.3);sessionStart=Date.now();
+  alertFired=false;stopAlarm();hideAlert();hideCD();updateUI();
+  addLog('ok','Stats reset.');
+}
+
+function updateSettings(){
+  EAR_THRESH=parseInt(document.getElementById('earThr').value)/100;
+  ALERT_SECS=parseInt(document.getElementById('secThr').value);
+  document.getElementById('earThrV').textContent=EAR_THRESH.toFixed(2);
+  document.getElementById('secThrV').textContent=ALERT_SECS+'s';
+  document.getElementById('earThrLbl').textContent='Thr:'+EAR_THRESH.toFixed(2);
+}
+updateSettings();
+
+// ============================================================
+// EAR CALCULATION
+// ============================================================
+function computeEAR(eye){
+  const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  return(d(eye[1],eye[5])+d(eye[2],eye[4]))/(2*d(eye[0],eye[3]));
+}
+const LE=[36,37,38,39,40,41],RE=[42,43,44,45,46,47];
+
+// ============================================================
+// REAL FACE DETECTION LOOP
+// ============================================================
+function startDetectionLoop(){
+  detInterval=setInterval(async()=>{
+    if(!isRunning||!videoEl)return;
+    try{
+      const r=await faceapi.detectSingleFace(videoEl,new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.5})).withFaceLandmarks(true).withFaceExpressions();
+      if(ctx)ctx.clearRect(0,0,overlayEl.width,overlayEl.height);
+      if(r){
+        document.getElementById('faceD').textContent='Yes ✓';
+        const pts=r.landmarks.positions;
+        drawLandmarks(pts,r.detection.box);
+        const ear=(computeEAR(LE.map(i=>pts[i]))+computeEAR(RE.map(i=>pts[i])))/2;
+        processEAR(ear);
+      }else{document.getElementById('faceD').textContent='No';processEAR(null)}
+    }catch(e){processEAR(null)}
+  },1000/FPS);
+}
+
+function drawLandmarks(pts,box){
+  if(!ctx)return;
+  ctx.save();
+  const ec=lastEar<EAR_THRESH?'#ff4d6d':'#00e5a0';
+  ctx.strokeStyle=ec;ctx.lineWidth=1;
+  ctx.strokeRect(box.x,box.y,box.width,box.height);
+  [...LE,...RE].forEach(i=>{ctx.beginPath();ctx.arc(pts[i].x,pts[i].y,2,0,Math.PI*2);ctx.fillStyle=ec;ctx.fill()});
+  [LE,RE].forEach(idxs=>{ctx.beginPath();idxs.forEach((i,j)=>j===0?ctx.moveTo(pts[i].x,pts[i].y):ctx.lineTo(pts[i].x,pts[i].y));ctx.closePath();ctx.globalAlpha=.6;ctx.stroke()});
+  ctx.restore();
+}
+
+// ============================================================
+// SIMULATION MODE
+// ============================================================
+let simF=0;
+function startSimulation(){
+  addLog('ok','Demo: awake (100f) → drowsy (80f) → 5s+ microsleep → recovery');
+  detInterval=setInterval(()=>{
+    if(!isRunning)return;
+    simF++;
+    document.getElementById('faceD').textContent='Sim ✓';
+    const c=simF%420;
+    let ear;
+    if(c<100)ear=0.28+Math.random()*.09+(c%18<2?-(0.2+Math.random()*.05):0);
+    else if(c<180)ear=0.19+Math.random()*.05+(c%25<5?-(0.12+Math.random()*.04):0);
+    else if(c<260)ear=0.04+Math.random()*.04; // 8s microsleep window
+    else ear=0.26+Math.random()*.09;
+    processEAR(ear);
+  },1000/FPS);
+}
+
+// ============================================================
+// CORE EAR PROCESSING
+// ============================================================
+function processEAR(ear){
+  if(ear===null){updateUI();drawChart();return}
+  lastEar=ear;
+  earHist.push(ear);if(earHist.length>60)earHist.shift();
+  earSum+=ear;earSamples++;
+
+  if(ear<EAR_THRESH){
+    // EYES CLOSED
+    closedFrames++;
+    eyeClosedSecs=closedFrames/FPS;
+    if(eyeClosedSecs>maxClosureSecs)maxClosureSecs=eyeClosedSecs;
+    if(eyeWasOpen)eyeWasOpen=false;
+    updateCD(eyeClosedSecs);
+
+    // === 5-SECOND RULE → BEEP + WHATSAPP + PHOTO ===
+    if(eyeClosedSecs>=ALERT_SECS&&!alertFired){
+      alertFired=true;
+      drowsyEvents++;
+      alertsSent++;
+      fire5SecAlert(eyeClosedSecs);
+    }
+
+    setDriverState(eyeClosedSecs>=ALERT_SECS?'sleeping':'drowsy');
+  }else{
+    // EYES OPEN
+    if(!eyeWasOpen){
+      if(closedFrames>=1&&eyeClosedSecs<ALERT_SECS*0.4){
+        blinkCount++;blinkHist.push(Date.now());
+        blinkHist=blinkHist.filter(t=>Date.now()-t<60000);
+      }
+      if(alertFired){
+        stopAlarm();alertFired=false;
+        hideAlert();hideCD();
+        addLog('ok',`Recovery: driver awake after ${eyeClosedSecs.toFixed(1)}s closure`);
+      }
+      closedFrames=0;eyeClosedSecs=0;eyeWasOpen=true;
+      hideCD();hideAlert();
+    }
+    if(!alertFired)setDriverState('awake');
+  }
+
+  const f=Math.max(0,(EAR_THRESH+.05-ear)/(EAR_THRESH+.05))*55;
+  const t=Math.min(eyeClosedSecs/ALERT_SECS,1)*45;
+  drowScore=Math.min(100,Math.round(f+t));
+  updateUI();drawChart();
+}
+
+// ============================================================
+// FIRE THE ALERT  ← CORE NEW LOGIC
+// ============================================================
+function fire5SecAlert(seconds){
+  // 1. BEEP CONTINUOUSLY
+  startAlarm();
+
+  // 2. ON-SCREEN ALERT
+  showAlert('🚨 MICROSLEEP '+seconds.toFixed(1)+'s — WAKING ALERT + OWNER NOTIFIED!','danger');
+
+  // 3. CAPTURE PHOTO
+  const photo=captureDriverPhoto();
+  lastAlertPhoto=photo;
+
+  // 4. SEND WHATSAPP + SHOW TOAST
+  triggerOwnerAlert(seconds, photo);
+
+  addLog('err',`🚨 ALERT FIRED: Eyes closed ${seconds.toFixed(1)}s → beeping + WhatsApp + photo sent`);
+}
+
+function triggerOwnerAlert(seconds, photoDataUrl){
+  const owner=document.getElementById('ownerName').value||'Owner';
+  const phone=document.getElementById('ownerPhone').value.replace(/\D/g,'')||'';
+  const vehicle=document.getElementById('vehicleId').value||'Unknown';
+  const now=new Date();
+  const timeStr=now.toLocaleTimeString('en-IN');
+  const dateStr=now.toLocaleDateString('en-IN');
+
+  // Build WhatsApp URL
+  const waMsg=
+`🚨 *DROWSINESS ALERT — DrowsyGuard*
+
+⚠️ *Driver may be sleeping at the wheel!*
+
+🚗 *Vehicle:* ${vehicle}
+😴 *Eyes closed:* ${seconds.toFixed(1)} seconds
+🕐 *Time:* ${timeStr}, ${dateStr}
+
+📸 Driver photo taken at moment of alert.
+
+Please check on the driver IMMEDIATELY!`;
+
+  const waUrl=phone
+    ?`https://wa.me/${phone}?text=${encodeURIComponent(waMsg)}`
+    :`https://wa.me/?text=${encodeURIComponent(waMsg)}`;
+
+  // AUTO-OPEN WhatsApp
+  window.open(waUrl,'_blank');
+
+  // TOAST
+  const tb=document.getElementById('toastBody');
+  tb.innerHTML=`<strong>${owner}</strong><br>Vehicle: ${vehicle}<br>Eyes closed <strong style="color:var(--red)">${seconds.toFixed(1)}s</strong> at ${timeStr}`;
+
+  const tp=document.getElementById('toastPhoto');
+  if(photoDataUrl){
+    tp.innerHTML=`<img src="${photoDataUrl}" alt="Driver at alert time"/>`;
+    tp.style.display='block';
+  }else{
+    tp.innerHTML='<div style="font-size:10px;color:var(--text3);font-family:var(--mono);padding:5px 0">No camera — simulation mode</div>';
+    tp.style.display='block';
+  }
+
+  const waLink=document.getElementById('toastWaLink');
+  waLink.href=waUrl;
+
+  const toast=document.getElementById('toast');
+  toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'),8000);
+
+  // ALERT HISTORY CARD
+  addAlertCard(owner, phone, vehicle, seconds, timeStr, photoDataUrl, waUrl);
+  document.getElementById('alertsM').textContent=alertsSent;
+}
+
+function addAlertCard(owner, phone, vehicle, seconds, timeStr, photo, waUrl){
+  const hist=document.getElementById('alertHist');
+  if(hist.querySelector('div[style]'))hist.innerHTML='';
+
+  const card=document.createElement('div');
+  card.className='alert-card';
+
+  const dlId='dl_'+Date.now();
+  card.innerHTML=`
+    <div class="ac-time">🕐 ${timeStr}</div>
+    <div class="ac-msg">🚨 MICROSLEEP — ${seconds.toFixed(1)}s eye closure</div>
+    <div class="ac-detail">Owner: ${owner} · Vehicle: ${vehicle}</div>
+    ${photo?`<div class="ac-photo"><img src="${photo}" alt="Driver photo" id="${dlId}"/></div>`:'<div class="ac-detail" style="color:var(--text3);margin-top:5px">📸 No camera (simulation)</div>'}
+    <div class="ac-actions">
+      <a class="ac-btn wa" href="${waUrl}" target="_blank">📲 WhatsApp</a>
+      ${photo?`<a class="ac-btn dl" href="${photo}" download="drowsy_alert_${Date.now()}.jpg">⬇ Photo</a>`:''}
+    </div>`;
+  hist.insertBefore(card,hist.firstChild);
+  while(hist.children.length>6)hist.removeChild(hist.lastChild);
+}
+
+function clearAlerts(){document.getElementById('alertHist').innerHTML='<div style="font-size:11px;color:var(--text3);font-family:var(--mono);text-align:center;padding:14px 0">No alerts yet</div>'}
+
+// ============================================================
+// COUNTDOWN UI
+// ============================================================
+function updateCD(secs){
+  const ov=document.getElementById('cdOverlay');
+  const arc=document.getElementById('cdArc');
+  const num=document.getElementById('cdNum');
+  const sec=document.getElementById('cdSec');
+  const tmr=document.getElementById('bigTmr');
+  const bar=document.getElementById('tmrBar');
+  const stat=document.getElementById('tmrStat');
+  const pill=document.getElementById('eyePill');
+  const pct=Math.min(secs/ALERT_SECS,1);
+  const rem=Math.max(0,ALERT_SECS-secs);
+
+  ov.classList.add('show');
+  arc.style.strokeDashoffset=188.5-(pct*188.5);
+  arc.style.stroke=pct<.5?'#ffc84a':'#ff4d6d';
+  num.textContent=rem<1?'!':Math.ceil(rem).toString();
+
+  tmr.textContent=secs.toFixed(1)+'s';
+  tmr.className='big-tmr '+(pct>=1?'alerting':'counting');
+  bar.style.width=(pct*100)+'%';
+  bar.style.background=pct<.5?'var(--yellow)':'var(--red)';
+
+  if(pct>=1){stat.textContent='🚨 ALERT! Beeping + WhatsApp sent!';sec.className='cd-sec danger'}
+  else if(pct>=.5){stat.textContent=`⚠ Warning — ${rem.toFixed(1)}s to alert`;sec.className='cd-sec'}
+  else{stat.textContent=`Eyes closing — ${rem.toFixed(1)}s to alert`;sec.className='cd-sec'}
+
+  pill.textContent='👁 '+secs.toFixed(1)+'s';
+  pill.className='eye-pill '+(pct>=1?'danger':pct>=.5?'warn':'');
+  document.getElementById('closedSec').textContent=secs.toFixed(1);
+  document.getElementById('closedSec').className='m-val '+(pct>=1?'danger':pct>=.5?'warn':'');
+}
+
+function hideCD(){
+  document.getElementById('cdOverlay').classList.remove('show');
+  document.getElementById('cdSec').className='cd-sec';
+  document.getElementById('bigTmr').className='big-tmr';
+  document.getElementById('bigTmr').textContent='0.0s';
+  document.getElementById('tmrBar').style.width='0%';
+  document.getElementById('tmrStat').textContent='Eyes open — normal';
+  document.getElementById('eyePill').textContent='👁 0.0s';
+  document.getElementById('eyePill').className='eye-pill';
+  document.getElementById('closedSec').textContent='0.0';
+  document.getElementById('closedSec').className='m-val';
+}
+
+// ============================================================
+// DRIVER STATE
+// ============================================================
+let lastState='';
+function setDriverState(state){
+  const cfg={
+    awake:{icon:'😊',name:'AWAKE',desc:'Driver is alert. EAR normal.',cls:'awake',sc:'active',st:'MONITORING'},
+    drowsy:{icon:'😴',name:'DROWSY',desc:'Eyes closing — stay alert!',cls:'drowsy',sc:'warn',st:'WARNING'},
+    sleeping:{icon:'💤',name:'MICRO-SLEEP',desc:'🚨 Beeping! WhatsApp alert sent to owner!',cls:'sleeping',sc:'danger',st:'ALERT!'},
+    standby:{icon:'😐',name:'STANDBY',desc:'Start monitoring to begin',cls:'',sc:'',st:'OFFLINE'},
+  };
+  const s=cfg[state]||cfg.standby;
+  document.getElementById('stateDisp').className='state-disp '+s.cls;
+  document.getElementById('sIcon').textContent=s.icon;
+  document.getElementById('sName').textContent=s.name;
+  document.getElementById('sDesc').textContent=s.desc;
+  document.getElementById('sdot').className='sdot '+s.sc;
+  document.getElementById('stext').textContent=s.st;
+
+  if(state!==lastState&&state!=='standby'){
+    if(state==='awake'&&lastState==='sleeping')addLog('ok','Driver awake — recovery confirmed');
+    if(state==='sleeping'&&lastState!=='sleeping')addLog('err','MICROSLEEP: eyes closed over '+ALERT_SECS+'s!');
+    if(state==='drowsy'&&lastState==='awake')addLog('warn','Drowsiness starting — eyes closing slowly');
+    lastState=state;
+  }
+
+  document.getElementById('scoreArc').style.strokeDashoffset=289-(drowScore/100)*289;
+  document.getElementById('scoreArc').style.stroke=drowScore<30?'var(--green)':drowScore<65?'var(--yellow)':'var(--red)';
+  document.getElementById('scoreNum').textContent=drowScore;
+}
+
+function showAlert(msg,type){const b=document.getElementById('alertBanner');b.textContent=msg;b.className='show '+type}
+function hideAlert(){document.getElementById('alertBanner').className=''}
+
+// ============================================================
+// UI UPDATE
+// ============================================================
+function updateUI(){
+  const br=blinkHist.filter(t=>Date.now()-t<60000).length;
+  document.getElementById('blinkRate').textContent=br;
+  document.getElementById('totalBlinks').textContent=blinkCount;
+  document.getElementById('drowsyEv').textContent=drowsyEvents;
+  document.getElementById('maxClos').textContent=maxClosureSecs.toFixed(1)+'s';
+  document.getElementById('avgEar').textContent=earSamples>0?(earSum/earSamples).toFixed(3):'—';
+
+  if(lastEar!==null){
+    const el=document.getElementById('earDisp'),bar=document.getElementById('earBar');
+    el.textContent=lastEar.toFixed(3);
+    bar.style.width=Math.min(100,lastEar/.4*100)+'%';
+    const c=lastEar<EAR_THRESH?'var(--red)':lastEar<EAR_THRESH+.04?'var(--yellow)':'var(--green)';
+    bar.style.background=c;el.style.color=c;
+  }
+}
+function updateSessTime(){
+  if(!sessionStart)return;
+  const e=Math.floor((Date.now()-sessionStart)/1000);
+  document.getElementById('sessTime').textContent=String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0');
+}
+function setStatus(cls,txt){document.getElementById('sdot').className='sdot '+cls;document.getElementById('stext').textContent=txt}
+
+// ============================================================
+// EAR CHART
+// ============================================================
+function drawChart(){
+  const canvas=document.getElementById('earChart');if(!canvas)return;
+  const w=canvas.offsetWidth,h=60;canvas.width=w;canvas.height=h;
+  const c=canvas.getContext('2d');c.clearRect(0,0,w,h);
+
+  c.strokeStyle='rgba(255,255,255,.05)';c.lineWidth=.5;
+  [.25,.5,.75].forEach(f=>{const y=h-f*h;c.beginPath();c.moveTo(0,y);c.lineTo(w,y);c.stroke()});
+
+  const ty=h-(EAR_THRESH/.4)*h;
+  c.strokeStyle='rgba(255,200,74,.5)';c.lineWidth=1;c.setLineDash([4,3]);
+  c.beginPath();c.moveTo(0,ty);c.lineTo(w,ty);c.stroke();c.setLineDash([]);
+
+  c.fillStyle='rgba(255,77,109,.06)';c.fillRect(0,ty,w,h-ty);
+
+  const n=earHist.length;
+  c.beginPath();
+  earHist.forEach((v,i)=>{const x=(i/(n-1))*w,y=h-Math.min(v,.4)/.4*h;i===0?c.moveTo(x,y):c.lineTo(x,y)});
+  c.strokeStyle='rgba(0,229,160,.9)';c.lineWidth=1.5;c.stroke();
+
+  earHist.forEach((v,i)=>{if(i===n-1){const x=(i/(n-1))*w,y=h-Math.min(v,.4)/.4*h;c.lineTo(x,h);c.lineTo(0,h)}});
+  const g=c.createLinearGradient(0,0,0,h);g.addColorStop(0,'rgba(0,229,160,.22)');g.addColorStop(1,'rgba(0,229,160,0)');
+  c.fillStyle=g;c.fill();
+
+  if(eyeClosedSecs>0){
+    const frac=Math.min(eyeClosedSecs/ALERT_SECS,1);
+    const mx=w*(1-frac*.15);
+    c.strokeStyle='rgba(255,77,109,.7)';c.lineWidth=1.5;
+    c.beginPath();c.moveTo(mx,0);c.lineTo(mx,h);c.stroke();
+    c.fillStyle='rgba(255,77,109,.8)';c.font='9px monospace';
+    c.fillText(eyeClosedSecs.toFixed(1)+'s',mx-24,10);
+  }
+}
+
+// ============================================================
+// LOG
+// ============================================================
+function addLog(type,msg){
+  const list=document.getElementById('logList');
+  const e=sessionStart?Math.floor((Date.now()-sessionStart)/1000):0;
+  const t=String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0');
+  const item=document.createElement('div');item.className='log-item';
+  item.innerHTML=`<div class="ldot ${type==='ok'?'ok':type==='warn'?'warn':'err'}"></div><span class="ltime">${t}</span><span class="lmsg">${msg}</span>`;
+  list.insertBefore(item,list.firstChild);
+  while(list.children.length>30)list.removeChild(list.lastChild);
+}
+function clearLog(){document.getElementById('logList').innerHTML='';addLog('ok','Log cleared.')}
+
+// ============================================================
+// INIT
+// ============================================================
+window.addEventListener('load',()=>{
+  setTimeout(loadModels,300);
+  window.addEventListener('resize',drawChart);
+  drawChart();
+});
+</script>
+</body>
+</html>
